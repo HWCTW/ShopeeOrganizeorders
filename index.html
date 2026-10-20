@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>蝦皮打單資料自動轉單工具</title>
+  <!-- 載入 SheetJS Excel 處理核心 -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    :root {
+      --primary: #ee4d2d;
+      --primary-hover: #d73818;
+      --bg-color: #f8fafc;
+      --card-bg: #ffffff;
+      --border-color: #e2e8f0;
+      --text-main: #1e293b;
+      --text-sub: #64748b;
+      --badge-plus: #e0f2fe;
+      --badge-plus-text: #0369a1;
+      --badge-mul: #fef3c7;
+      --badge-mul-text: #b45309;
+    }
+
+    * {
+      box-sizing: border-box;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft JhengHei", Roboto, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      margin: 0;
+      padding: 24px;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .header h1 {
+      font-size: 28px;
+      color: var(--text-main);
+      margin-bottom: 8px;
+    }
+
+    .header p {
+      color: var(--text-sub);
+      font-size: 15px;
+      margin: 0;
+    }
+
+    /* 檔案上傳區塊 */
+    .upload-box {
+      border: 2px dashed var(--border-color);
+      border-radius: 12px;
+      padding: 40px 20px;
+      text-align: center;
+      background: var(--card-bg);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin-bottom: 24px;
+    }
+
+    .upload-box:hover, .upload-box.dragover {
+      border-color: var(--primary);
+      background: #fffafa;
+    }
+
+    .upload-box input[type="file"] {
+      display: none;
+    }
+
+    .upload-btn {
+      background-color: var(--primary);
+      color: white;
+      padding: 10px 24px;
+      border-radius: 6px;
+      font-weight: 600;
+      display: inline-block;
+      margin-top: 12px;
+      transition: 0.2s;
+    }
+
+    .upload-btn:hover {
+      background-color: var(--primary-hover);
+    }
+
+    /* 統計資訊卡片 */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+      display: none;
+    }
+
+    .stat-card {
+      background: var(--card-bg);
+      padding: 16px;
+      border-radius: 10px;
+      border: 1px solid var(--border-color);
+      text-align: center;
+    }
+
+    .stat-card .label {
+      font-size: 13px;
+      color: var(--text-sub);
+      margin-bottom: 4px;
+    }
+
+    .stat-card .value {
+      font-size: 24px;
+      font-weight: bold;
+      color: var(--text-main);
+    }
+
+    /* 控制與下載按鈕 */
+    .action-bar {
+      display: none;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      background: var(--card-bg);
+      padding: 16px;
+      border-radius: 10px;
+      border: 1px solid var(--border-color);
+    }
+
+    .btn-download {
+      background-color: #10b981;
+      color: white;
+      border: none;
+      padding: 10px 24px;
+      border-radius: 6px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+
+    .btn-download:hover {
+      background-color: #059669;
+    }
+
+    /* 資料預覽表格 */
+    .table-container {
+      overflow-x: auto;
+      background: var(--card-bg);
+      border-radius: 10px;
+      border: 1px solid var(--border-color);
+      display: none;
+      max-height: 650px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 14px;
+    }
+
+    th {
+      background-color: #f1f5f9;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      padding: 12px 14px;
+      font-weight: 600;
+      color: #334155;
+      border-bottom: 2px solid var(--border-color);
+      white-space: nowrap;
+    }
+
+    td {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border-color);
+      color: #475569;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    tr:hover {
+      background-color: #f8fafc;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-left: 6px;
+    }
+
+    .badge-plus {
+      background-color: var(--badge-plus);
+      color: var(--badge-plus-text);
+    }
+
+    .badge-mul {
+      background-color: var(--badge-mul);
+      color: var(--badge-mul-text);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div class="header">
+      <h1>蝦皮訂單打單資料轉單工具</h1>
+      <p>支援多入組合 (+號拆行) 與單入多件組合 (x號乘量除價)，自動化轉換並保留所有原始欄位（畫面僅預覽 11 個主要欄位）</p>
+    </div>
+
+    <!-- 檔案上傳區 -->
+    <div class="upload-box" id="dropArea">
+      <input type="file" id="fileInput" accept=".xlsx, .xls, .csv" />
+      <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" fill="#94a3b8" viewBox="0 0 24 24" style="margin-bottom: 10px;">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm1 14h-3v3h-2v-3H7v-2h3v-3h2v3h3v2zm-2-9V3.5L18.5 9H13z"/>
+      </svg>
+      <h3 style="margin: 0 0 8px 0; color: #334155;">點擊或拖曳蝦皮 Excel 訂單報表到此處</h3>
+      <p style="margin: 0; color: #64748b; font-size: 13px;">支援 .xlsx、.xls、.csv 格式</p>
+      <span class="upload-btn">選擇檔案</span>
+    </div>
+
+    <!-- 統計卡片 -->
+    <div class="stats-grid" id="statsGrid">
+      <div class="stat-card">
+        <div class="label">原始訂單列數</div>
+        <div class="value" id="statOriginal">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">組合拆列 (+號) 執行計數</div>
+        <div class="value" id="statPlus" style="color: #0284c7;">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">單入倍增 (x號) 執行計數</div>
+        <div class="value" id="statMul" style="color: #d97706;">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">轉換後總計列數</div>
+        <div class="value" id="statFinal" style="color: #10b981;">0</div>
+      </div>
+    </div>
+
+    <!-- 操作按鈕列 -->
+    <div class="action-bar" id="actionBar">
+      <div>
+        <span style="font-weight: 600; color: #334155;">資料預覽（畫面僅顯示 11 個重要欄位，下載時會保留全部原始欄位）</span>
+        <span id="fileNameDisplay" style="margin-left: 12px; font-size: 13px; color: #64748b;"></span>
+      </div>
+      <button class="btn-download" id="downloadBtn">下載轉換完成 Excel</button>
+    </div>
+
+    <!-- 資料預覽表格 -->
+    <div class="table-container" id="tableContainer">
+      <table id="previewTable">
+        <thead>
+          <tr>
+            <th>訂單編號</th>
+            <th>商品選項名稱</th>
+            <th>商品原價</th>
+            <th>商品活動價格</th>
+            <th>主商品貨號</th>
+            <th>商品選項貨號</th>
+            <th>數量</th>
+            <th>收件地址</th>
+            <th>收件者姓名</th>
+            <th>買家備註</th>
+            <th>備註</th>
+          </tr>
+        </thead>
+        <tbody id="previewTbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    // 指定產出的 11 個標準欄位名稱 (用於預覽和查找對應資料)
+    const TARGET_HEADERS = [
+      "訂單編號",
+      "商品選項名稱",
+      "商品原價",
+      "商品活動價格",
+      "主商品貨號",
+      "商品選項貨號",
+      "數量",
+      "收件地址",
+      "收件者姓名",
+      "買家備註",
+      "備註"
+    ];
+
+    // Excel 欄位字母備援對應序號（A=0, AA=26, AD=29, AE=30, AF=31, AG=32, AH=33, AL=37, AS=44, BC=54, BD=55）
+    const FALLBACK_COL_INDEXES = {
+      "訂單編號": 0,       // A
+      "商品選項名稱": 26,    // AA
+      "商品原價": 29,        // AD
+      "商品活動價格": 30,    // AE
+      "主商品貨號": 31,      // AF
+      "商品選項貨號": 32,    // AG
+      "數量": 33,            // AH
+      "收件地址": 37,        // AL
+      "收件者姓名": 44,      // AS
+      "買家備註": 54,        // BC
+      "備註": 55             // BD
+    };
+
+    let processedData = [];
+    let uploadFileName = "蝦皮打單資料";
+    let originalHeaders = [];
+    let actualHeaderNames = {}; // 用來存儲檔案內真實的標題名稱，防呆處理空白等差異
+
+    const dropArea = document.getElementById("dropArea");
+    const fileInput = document.getElementById("fileInput");
+
+    dropArea.addEventListener("click", () => fileInput.click());
+    dropArea.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dropArea.classList.add("dragover");
+    });
+    dropArea.addEventListener("dragleave", () => dropArea.classList.remove("dragover"));
+    dropArea.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropArea.classList.remove("dragover");
+      if (e.dataTransfer.files.length) {
+        handleFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    fileInput.addEventListener("change", (e) => {
+      if (e.target.files.length) {
+        handleFile(e.target.files[0]);
+      }
+    });
+
+    function handleFile(file) {
+      uploadFileName = file.name.replace(/\.[^/.]+$/, "");
+      document.getElementById("fileNameDisplay").innerText = `檔案來源：${file.name}`;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        
+        // 轉為二維陣列（包含標題與空白欄位）
+        const rawRows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+        if (rawRows.length < 2) {
+          alert("Excel 檔案內容或資料列不足。");
+          return;
+        }
+
+        processOrders(rawRows);
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    // 小數點格式化處理（保留除不盡時的最簡 2 位小數，若是整數則呈現整數）
+    function formatPrice(val) {
+      const num = parseFloat(val) || 0;
+      return Math.round(num * 100) / 100;
+    }
+
+    function processOrders(rawRows) {
+      originalHeaders = rawRows[0];
+      
+      // 判斷並對應 11 個目標欄位的陣列欄號索引
+      const colMap = {};
+      TARGET_HEADERS.forEach(title => {
+        let foundIdx = originalHeaders.findIndex(h => String(h).trim() === title);
+        if (foundIdx === -1) {
+          // 若標題名稱微調，則採用欄位字母 Index 備援對應
+          foundIdx = FALLBACK_COL_INDEXES[title];
+        }
+        colMap[title] = foundIdx;
+        
+        // 記錄從檔案中抓出的「實際標題名稱」，為了避免之後回存物件屬性對不上
+        actualHeaderNames[title] = originalHeaders[foundIdx];
+      });
+
+      processedData = [];
+      let plusCount = 0;
+      let mulCount = 0;
+      const originalRowCount = rawRows.length - 1;
+
+      // 逐列處理資料
+      for (let i = 1; i < rawRows.length; i++) {
+        const row = rawRows[i];
+        
+        // 將該列原始資料建立成一個完整物件（保留所有欄位不刪除）
+        const baseItem = {};
+        originalHeaders.forEach((h, idx) => {
+          baseItem[h] = row[idx] !== undefined ? row[idx] : "";
+        });
+
+        // 讀取該列需要進行邏輯判斷的重要欄位值
+        const orderId   = String(row[colMap["訂單編號"]] || "").trim();
+        if (!orderId) continue; // 略過無訂單編號的空列
+
+        const origAD    = parseFloat(row[colMap["商品原價"]]) || 0;
+        const origAE    = parseFloat(row[colMap["商品活動價格"]]) || 0;
+        const origAH    = parseInt(row[colMap["數量"]], 10) || 1;
+        const skuVal    = String(row[colMap["商品選項貨號"]] || "").trim();
+
+        // 規則一：判斷 "+" 多入組合商品
+        if (skuVal.includes("+")) {
+          const skuParts = skuVal.split("+").map(s => s.trim()).filter(Boolean);
+          const N = skuParts.length;
+          plusCount++;
+
+          const dividedAD = formatPrice(origAD / N);
+          const dividedAE = formatPrice(origAE / N);
+
+          skuParts.forEach((singleSku) => {
+            let cleanSku = singleSku;
+            let qty = 1;
+            let rowAD = dividedAD;
+            let rowAE = dividedAE;
+
+            const mulMatch = singleSku.match(/^(.+?)[xX*](\d+)$/);
+            if (mulMatch) {
+              cleanSku = mulMatch[1].trim();
+              const mult = parseInt(mulMatch[2], 10) || 1;
+              qty = mult;
+              rowAD = formatPrice(dividedAD / mult);
+              rowAE = formatPrice(dividedAE / mult);
+            }
+
+            // 複製全部原始欄位，並覆寫被改變的欄位資料
+            let newItem = { ...baseItem };
+            newItem[actualHeaderNames["商品原價"]] = rowAD;
+            newItem[actualHeaderNames["商品活動價格"]] = rowAE;
+            newItem[actualHeaderNames["主商品貨號"]] = cleanSku;
+            newItem[actualHeaderNames["商品選項貨號"]] = cleanSku;
+            newItem[actualHeaderNames["數量"]] = qty;
+            newItem._badge = "PLUS";
+
+            processedData.push(newItem);
+          });
+        }
+        // 規則二：判斷 "x數字" 單入組合商品（無+號的情況）
+        else if (/[xX*]\d+$/.test(skuVal)) {
+          const mulMatch = skuVal.match(/^(.*?)[xX*](\d+)$/);
+          const cleanSku = mulMatch[1].trim();
+          const mult = parseInt(mulMatch[2], 10) || 1;
+          mulCount++;
+
+          const calcQty = origAH * mult;
+          const calcAE  = formatPrice(origAE / mult);
+          const calcAD  = formatPrice(origAD / mult);
+
+          let newItem = { ...baseItem };
+          newItem[actualHeaderNames["商品原價"]] = calcAD;
+          newItem[actualHeaderNames["商品活動價格"]] = calcAE;
+          newItem[actualHeaderNames["主商品貨號"]] = cleanSku;
+          newItem[actualHeaderNames["商品選項貨號"]] = cleanSku;
+          newItem[actualHeaderNames["數量"]] = calcQty;
+          newItem._badge = "MUL";
+
+          processedData.push(newItem);
+        }
+        // 一般商品貨號：保留原單列資料，稍微補齊主商品貨號
+        else {
+          const parentSku = String(row[colMap["主商品貨號"]] || "").trim() || skuVal;
+          let newItem = { ...baseItem };
+          newItem[actualHeaderNames["主商品貨號"]] = parentSku;
+          newItem._badge = null;
+
+          processedData.push(newItem);
+        }
+      }
+
+      // 更新統計數值
+      document.getElementById("statOriginal").innerText = originalRowCount;
+      document.getElementById("statPlus").innerText = `${plusCount} 筆`;
+      document.getElementById("statMul").innerText = `${mulCount} 筆`;
+      document.getElementById("statFinal").innerText = processedData.length;
+
+      renderPreviewTable();
+
+      // 顯示表格與按鈕列
+      document.getElementById("statsGrid").style.display = "grid";
+      document.getElementById("actionBar").style.display = "flex";
+      document.getElementById("tableContainer").style.display = "block";
+    }
+
+    // 渲染 HTML 資料預覽表 (只抽顯示 11 個目標欄位)
+    function renderPreviewTable() {
+      const tbody = document.getElementById("previewTbody");
+      tbody.innerHTML = "";
+
+      processedData.forEach(row => {
+        const tr = document.createElement("tr");
+
+        // 貨號標籤
+        let badgeHtml = "";
+        if (row._badge === "PLUS") {
+          badgeHtml = `<span class="badge badge-plus">+組合拆行</span>`;
+        } else if (row._badge === "MUL") {
+          badgeHtml = `<span class="badge badge-mul">x組合除價</span>`;
+        }
+
+        // 使用 actualHeaderNames 對應真實屬性，避免undefined
+        tr.innerHTML = `
+          <td><strong>${row[actualHeaderNames["訂單編號"]]}</strong></td>
+          <td>${row[actualHeaderNames["商品選項名稱"]]}</td>
+          <td>${row[actualHeaderNames["商品原價"]]}</td>
+          <td style="color: #ee4d2d; font-weight: bold;">${row[actualHeaderNames["商品活動價格"]]}</td>
+          <td>${row[actualHeaderNames["主商品貨號"]]}</td>
+          <td>${row[actualHeaderNames["商品選項貨號"]]} ${badgeHtml}</td>
+          <td><strong>${row[actualHeaderNames["數量"]]}</strong></td>
+          <td>${row[actualHeaderNames["收件地址"]]}</td>
+          <td>${row[actualHeaderNames["收件者姓名"]]}</td>
+          <td>${row[actualHeaderNames["買家備註"]]}</td>
+          <td>${row[actualHeaderNames["備註"]]}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // 下載轉換後的 Excel XLSX (包含所有原始欄位資料不刪除)
+    document.getElementById("downloadBtn").addEventListener("click", () => {
+      if (!processedData.length) return;
+
+      // 剔除暫存用的 _badge 屬性
+      const exportData = processedData.map(row => {
+        const item = { ...row };
+        delete item._badge;
+        return item;
+      });
+
+      // 設定 header 為 originalHeaders，確保匯出時欄位順序與總數都跟原檔一模一樣
+      const worksheet = XLSX.utils.json_to_sheet(exportData, { header: originalHeaders });
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "打單資料");
+
+      const outName = `${uploadFileName}_轉換完成.xlsx`;
+      XLSX.writeFile(workbook, outName);
+    });
+  </script>
+</body>
+</html>
