@@ -214,7 +214,7 @@
   <div class="container">
     <div class="header">
       <h1>蝦皮訂單打單資料轉單工具</h1>
-      <p>支援多入組合 (+號拆行) 與單入多件組合 (x號乘量除價)，自動化轉換並保留所有原始欄位（畫面僅預覽 11 個主要欄位）</p>
+      <p>支援多入組合 (+號拆行拆貨號) 與單入多件組合，活動價格自動平攤，原價維持整數</p>
     </div>
 
     <!-- 檔案上傳區 -->
@@ -251,7 +251,7 @@
     <!-- 操作按鈕列 -->
     <div class="action-bar" id="actionBar">
       <div>
-        <span style="font-weight: 600; color: #334155;">資料預覽（畫面僅顯示 11 個重要欄位，下載時會保留全部原始欄位）</span>
+        <span style="font-weight: 600; color: #334155;">資料預覽（預設呈現目標 11 欄位）</span>
         <span id="fileNameDisplay" style="margin-left: 12px; font-size: 13px; color: #64748b;"></span>
       </div>
       <button class="btn-download" id="downloadBtn">下載轉換完成 Excel</button>
@@ -281,7 +281,7 @@
   </div>
 
   <script>
-    // 指定產出的 11 個標準欄位名稱 (用於預覽和查找對應資料)
+    // 欲顯示（保留顯示）的 11 個標準欄位名稱
     const TARGET_HEADERS = [
       "訂單編號",
       "商品選項名稱",
@@ -296,25 +296,13 @@
       "備註"
     ];
 
-    // Excel 欄位字母備援對應序號（A=0, AA=26, AD=29, AE=30, AF=31, AG=32, AH=33, AL=37, AS=44, BC=54, BD=55）
-    const FALLBACK_COL_INDEXES = {
-      "訂單編號": 0,       // A
-      "商品選項名稱": 26,    // AA
-      "商品原價": 29,        // AD
-      "商品活動價格": 30,    // AE
-      "主商品貨號": 31,      // AF
-      "商品選項貨號": 32,    // AG
-      "數量": 33,            // AH
-      "收件地址": 37,        // AL
-      "收件者姓名": 44,      // AS
-      "買家備註": 54,        // BC
-      "備註": 55             // BD
-    };
+    // Excel 欄位索引對應 (A=0, C=2, Z=25, AA=26, AB=27, AC=28, AD=29, AE=30, AF=31, AG=32, AH=33, AL=37, AM=38, AS=44, BC=54, BD=55)
+    const DELETE_INDEXES = [2, 25, 27, 28]; // 徹底刪除的欄位：C(熱門商品), Z(商品ID), AB(規格ID), AC(蝦皮商品編碼)
 
-    let processedData = [];
+    let finalHeaders = [];
+    let processedRows = [];
+    let displayData = [];
     let uploadFileName = "蝦皮打單資料";
-    let originalHeaders = [];
-    let actualHeaderNames = {}; // 用來存儲檔案內真實的標題名稱，防呆處理空白等差異
 
     const dropArea = document.getElementById("dropArea");
     const fileInput = document.getElementById("fileInput");
@@ -350,7 +338,6 @@
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
         
-        // 轉為二維陣列（包含標題與空白欄位）
         const rawRows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
         if (rawRows.length < 2) {
           alert("Excel 檔案內容或資料列不足。");
@@ -362,90 +349,133 @@
       reader.readAsArrayBuffer(file);
     }
 
-    // 小數點格式化處理（保留除不盡時的最簡 2 位小數，若是整數則呈現整數）
+    // 小數點格式化處理（保留最多 2 位小數）
     function formatPrice(val) {
       const num = parseFloat(val) || 0;
       return Math.round(num * 100) / 100;
     }
 
-    function processOrders(rawRows) {
-      originalHeaders = rawRows[0];
-      
-      // 判斷並對應 11 個目標欄位的陣列欄號索引
-      const colMap = {};
-      TARGET_HEADERS.forEach(title => {
-        let foundIdx = originalHeaders.findIndex(h => String(h).trim() === title);
-        if (foundIdx === -1) {
-          // 若標題名稱微調，則採用欄位字母 Index 備援對應
-          foundIdx = FALLBACK_COL_INDEXES[title];
-        }
-        colMap[title] = foundIdx;
-        
-        // 記錄從檔案中抓出的「實際標題名稱」，為了避免之後回存物件屬性對不上
-        actualHeaderNames[title] = originalHeaders[foundIdx];
-      });
+    // 商品原價專用格式化（無小數點，一律取整數）
+    function formatIntPrice(val) {
+      const num = parseFloat(val) || 0;
+      return Math.round(num);
+    }
 
-      processedData = [];
+    function processOrders(rawRows) {
+      let headerRow = rawRows[0].map(h => String(h || "").trim());
+
+      // 1. 修正 AM 欄位標題（僅保留「收件者電話」）
+      if (headerRow[38]) {
+        headerRow[38] = "收件者電話";
+      }
+
+      // 2. 建立剔除 C(2), Z(25), AB(27), AC(28) 後的欄位索引清單
+      const keepIndexes = [];
+      for (let i = 0; i < headerRow.length; i++) {
+        if (!DELETE_INDEXES.includes(i)) {
+          keepIndexes.push(i);
+        }
+      }
+
+      finalHeaders = keepIndexes.map(idx => headerRow[idx]);
+
+      // 取得關鍵欄位在原始列陣列中的 Index 索引
+      const orderIdIdx   = 0;  // A: 訂單編號
+      const optNameIdx   = 26; // AA: 商品選項名稱
+      const origADIdx    = 29; // AD: 商品原價
+      const origAEIdx    = 30; // AE: 商品活動價格
+      const parentSkuIdx = 31; // AF: 主商品貨號
+      const skuValIdx    = 32; // AG: 商品選項貨號
+      const qtyIdx       = 33; // AH: 數量
+      const addrIdx      = 37; // AL: 收件地址
+      const buyerNameIdx = 44; // AS: 收件者姓名
+      const bRemarkIdx   = 54; // BC: 買家備註
+      const remarkIdx    = 55; // BD: 備註
+
+      processedRows = [];
+      displayData = [];
       let plusCount = 0;
       let mulCount = 0;
       const originalRowCount = rawRows.length - 1;
 
+      // 取得關鍵欄位在 finalHeaders (過濾後陣列) 中的新索引位址
+      const newADIdx = finalHeaders.indexOf(headerRow[origADIdx]);
+      const newAEIdx = finalHeaders.indexOf(headerRow[origAEIdx]);
+      const newAFIdx = finalHeaders.indexOf(headerRow[parentSkuIdx]);
+      const newAGIdx = finalHeaders.indexOf(headerRow[skuValIdx]);
+      const newAHIdx = finalHeaders.indexOf(headerRow[qtyIdx]);
+
       // 逐列處理資料
       for (let i = 1; i < rawRows.length; i++) {
         const row = rawRows[i];
-        
-        // 將該列原始資料建立成一個完整物件（保留所有欄位不刪除）
-        const baseItem = {};
-        originalHeaders.forEach((h, idx) => {
-          baseItem[h] = row[idx] !== undefined ? row[idx] : "";
-        });
+        const orderId = String(row[orderIdIdx] || "").trim();
+        if (!orderId) continue; // 忽略無訂單編號的列
 
-        // 讀取該列需要進行邏輯判斷的重要欄位值
-        const orderId   = String(row[colMap["訂單編號"]] || "").trim();
-        if (!orderId) continue; // 略過無訂單編號的空列
+        const optName   = row[optNameIdx] || "";
+        const rawADVal  = row[origADIdx];
+        const intAD     = formatIntPrice(rawADVal); // 商品原價：無小數點整數
+        const origAE    = parseFloat(row[origAEIdx]) || 0;
+        const origAH    = parseInt(row[qtyIdx], 10) || 1;
+        const addr      = row[addrIdx] || "";
+        const buyerName = row[buyerNameIdx] || "";
+        const bRemark   = row[bRemarkIdx] || "";
+        const remark    = row[remarkIdx] || "";
+        const skuVal    = String(row[skuValIdx] || "").trim();
 
-        const origAD    = parseFloat(row[colMap["商品原價"]]) || 0;
-        const origAE    = parseFloat(row[colMap["商品活動價格"]]) || 0;
-        const origAH    = parseInt(row[colMap["數量"]], 10) || 1;
-        const skuVal    = String(row[colMap["商品選項貨號"]] || "").trim();
+        // 建立濾除 4 個指定刪除欄位後的列資料模板
+        const filteredRowTemplate = keepIndexes.map(idx => row[idx] !== undefined ? row[idx] : "");
 
-        // 規則一：判斷 "+" 多入組合商品
+        // 規則一：AG 欄位 (商品選項貨號) 包含 "+" 多入組合拆行
         if (skuVal.includes("+")) {
           const skuParts = skuVal.split("+").map(s => s.trim()).filter(Boolean);
-          const N = skuParts.length;
           plusCount++;
 
-          const dividedAD = formatPrice(origAD / N);
-          const dividedAE = formatPrice(origAE / N);
-
-          skuParts.forEach((singleSku) => {
-            let cleanSku = singleSku;
+          // 計算該組組合總共包含幾件商品
+          let totalUnitsPerSet = 0;
+          const parsedParts = skuParts.map(part => {
+            let cleanSku = part;
             let qty = 1;
-            let rowAD = dividedAD;
-            let rowAE = dividedAE;
-
-            const mulMatch = singleSku.match(/^(.+?)[xX*](\d+)$/);
+            const mulMatch = part.match(/^(.+?)[xX*](\d+)$/);
             if (mulMatch) {
               cleanSku = mulMatch[1].trim();
-              const mult = parseInt(mulMatch[2], 10) || 1;
-              qty = mult;
-              rowAD = formatPrice(dividedAD / mult);
-              rowAE = formatPrice(dividedAE / mult);
+              qty = parseInt(mulMatch[2], 10) || 1;
             }
+            totalUnitsPerSet += qty;
+            return { cleanSku, qty };
+          });
 
-            // 複製全部原始欄位，並覆寫被改變的欄位資料
-            let newItem = { ...baseItem };
-            newItem[actualHeaderNames["商品原價"]] = rowAD;
-            newItem[actualHeaderNames["商品活動價格"]] = rowAE;
-            newItem[actualHeaderNames["主商品貨號"]] = cleanSku;
-            newItem[actualHeaderNames["商品選項貨號"]] = cleanSku;
-            newItem[actualHeaderNames["數量"]] = qty;
-            newItem._badge = "PLUS";
+          // 活動價格除以總件數，商品原價維持原原始整數值
+          const calcAE = formatPrice(origAE / totalUnitsPerSet);
 
-            processedData.push(newItem);
+          parsedParts.forEach(item => {
+            const rowQty = origAH * item.qty;
+
+            const newRow = [...filteredRowTemplate];
+            if (newADIdx !== -1) newRow[newADIdx] = intAD;
+            if (newAEIdx !== -1) newRow[newAEIdx] = calcAE;
+            if (newAFIdx !== -1) newRow[newAFIdx] = item.cleanSku; // 主商品貨號為純品號
+            if (newAGIdx !== -1) newRow[newAGIdx] = item.cleanSku; // 商品選項貨號同步為純品號
+            if (newAHIdx !== -1) newRow[newAHIdx] = rowQty;
+
+            processedRows.push(newRow);
+
+            displayData.push({
+              "訂單編號": orderId,
+              "商品選項名稱": optName,
+              "商品原價": intAD,
+              "商品活動價格": calcAE,
+              "主商品貨號": item.cleanSku,
+              "商品選項貨號": item.cleanSku,
+              "數量": rowQty,
+              "收件地址": addr,
+              "收件者姓名": buyerName,
+              "買家備註": bRemark,
+              "備註": remark,
+              "_badge": "PLUS"
+            });
           });
         }
-        // 規則二：判斷 "x數字" 單入組合商品（無+號的情況）
+        // 規則二：單一品號帶有 "x數字" 倍數商品 (無 + 號，例：2040000112x2)
         else if (/[xX*]\d+$/.test(skuVal)) {
           const mulMatch = skuVal.match(/^(.*?)[xX*](\d+)$/);
           const cleanSku = mulMatch[1].trim();
@@ -453,95 +483,127 @@
           mulCount++;
 
           const calcQty = origAH * mult;
-          const calcAE  = formatPrice(origAE / mult);
-          const calcAD  = formatPrice(origAD / mult);
+          const calcAE  = formatPrice(origAE / mult); // 活動價格除以數量
 
-          let newItem = { ...baseItem };
-          newItem[actualHeaderNames["商品原價"]] = calcAD;
-          newItem[actualHeaderNames["商品活動價格"]] = calcAE;
-          newItem[actualHeaderNames["主商品貨號"]] = cleanSku;
-          newItem[actualHeaderNames["商品選項貨號"]] = cleanSku;
-          newItem[actualHeaderNames["數量"]] = calcQty;
-          newItem._badge = "MUL";
+          const newRow = [...filteredRowTemplate];
+          if (newADIdx !== -1) newRow[newADIdx] = intAD;
+          if (newAEIdx !== -1) newRow[newAEIdx] = calcAE;
+          if (newAFIdx !== -1) newRow[newAFIdx] = cleanSku; // 主商品貨號為純品號
+          if (newAGIdx !== -1) newRow[newAGIdx] = skuVal;   // 商品選項貨號保留原字串 (如 2040000112x2)
+          if (newAHIdx !== -1) newRow[newAHIdx] = calcQty;
 
-          processedData.push(newItem);
+          processedRows.push(newRow);
+
+          displayData.push({
+            "訂單編號": orderId,
+            "商品選項名稱": optName,
+            "商品原價": intAD,
+            "商品活動價格": calcAE,
+            "主商品貨號": cleanSku,
+            "商品選項貨號": skuVal,
+            "數量": calcQty,
+            "收件地址": addr,
+            "收件者姓名": buyerName,
+            "買家備註": bRemark,
+            "備註": remark,
+            "_badge": "MUL"
+          });
         }
-        // 一般商品貨號：保留原單列資料，稍微補齊主商品貨號
+        // 一般單一品號
         else {
-          const parentSku = String(row[colMap["主商品貨號"]] || "").trim() || skuVal;
-          let newItem = { ...baseItem };
-          newItem[actualHeaderNames["主商品貨號"]] = parentSku;
-          newItem._badge = null;
+          const parentSku = String(row[parentSkuIdx] || "").trim() || skuVal;
 
-          processedData.push(newItem);
+          const newRow = [...filteredRowTemplate];
+          if (newADIdx !== -1) newRow[newADIdx] = intAD;
+          if (newAEIdx !== -1) newRow[newAEIdx] = origAE;
+          if (newAFIdx !== -1) newRow[newAFIdx] = parentSku;
+          if (newAGIdx !== -1) newRow[newAGIdx] = skuVal;
+          if (newAHIdx !== -1) newRow[newAHIdx] = origAH;
+
+          processedRows.push(newRow);
+
+          displayData.push({
+            "訂單編號": orderId,
+            "商品選項名稱": optName,
+            "商品原價": intAD,
+            "商品活動價格": origAE,
+            "主商品貨號": parentSku,
+            "商品選項貨號": skuVal,
+            "數量": origAH,
+            "收件地址": addr,
+            "收件者姓名": buyerName,
+            "買家備註": bRemark,
+            "備註": remark,
+            "_badge": null
+          });
         }
       }
 
-      // 更新統計數值
+      // 更新統計數據
       document.getElementById("statOriginal").innerText = originalRowCount;
       document.getElementById("statPlus").innerText = `${plusCount} 筆`;
       document.getElementById("statMul").innerText = `${mulCount} 筆`;
-      document.getElementById("statFinal").innerText = processedData.length;
+      document.getElementById("statFinal").innerText = processedRows.length;
 
       renderPreviewTable();
 
-      // 顯示表格與按鈕列
+      // 顯示表格與操作介面
       document.getElementById("statsGrid").style.display = "grid";
       document.getElementById("actionBar").style.display = "flex";
       document.getElementById("tableContainer").style.display = "block";
     }
 
-    // 渲染 HTML 資料預覽表 (只抽顯示 11 個目標欄位)
+    // 渲染資料預覽表 (呈現 11 個主要關注欄位)
     function renderPreviewTable() {
       const tbody = document.getElementById("previewTbody");
       tbody.innerHTML = "";
 
-      processedData.forEach(row => {
+      displayData.forEach(row => {
         const tr = document.createElement("tr");
 
-        // 貨號標籤
         let badgeHtml = "";
         if (row._badge === "PLUS") {
-          badgeHtml = `<span class="badge badge-plus">+組合拆行</span>`;
+          badgeHtml = `<span class="badge badge-plus">+組合拆行拆號</span>`;
         } else if (row._badge === "MUL") {
-          badgeHtml = `<span class="badge badge-mul">x組合除價</span>`;
+          badgeHtml = `<span class="badge badge-mul">x組合數量倍增</span>`;
         }
 
-        // 使用 actualHeaderNames 對應真實屬性，避免undefined
         tr.innerHTML = `
-          <td><strong>${row[actualHeaderNames["訂單編號"]]}</strong></td>
-          <td>${row[actualHeaderNames["商品選項名稱"]]}</td>
-          <td>${row[actualHeaderNames["商品原價"]]}</td>
-          <td style="color: #ee4d2d; font-weight: bold;">${row[actualHeaderNames["商品活動價格"]]}</td>
-          <td>${row[actualHeaderNames["主商品貨號"]]}</td>
-          <td>${row[actualHeaderNames["商品選項貨號"]]} ${badgeHtml}</td>
-          <td><strong>${row[actualHeaderNames["數量"]]}</strong></td>
-          <td>${row[actualHeaderNames["收件地址"]]}</td>
-          <td>${row[actualHeaderNames["收件者姓名"]]}</td>
-          <td>${row[actualHeaderNames["買家備註"]]}</td>
-          <td>${row[actualHeaderNames["備註"]]}</td>
+          <td><strong>${row["訂單編號"]}</strong></td>
+          <td>${row["商品選項名稱"]}</td>
+          <td>${row["商品原價"]}</td>
+          <td style="color: #ee4d2d; font-weight: bold;">${row["商品活動價格"]}</td>
+          <td>${row["主商品貨號"]}</td>
+          <td>${row["商品選項貨號"]} ${badgeHtml}</td>
+          <td><strong>${row["數量"]}</strong></td>
+          <td>${row["收件地址"]}</td>
+          <td>${row["收件者姓名"]}</td>
+          <td>${row["買家備註"]}</td>
+          <td>${row["備註"]}</td>
         `;
         tbody.appendChild(tr);
       });
     }
 
-    // 下載轉換後的 Excel XLSX (包含所有原始欄位資料不刪除)
+    // 下載轉換後的 Excel XLSX（保留完整原始欄位，僅隱藏非 11 個目標欄位）
     document.getElementById("downloadBtn").addEventListener("click", () => {
-      if (!processedData.length) return;
+      if (!processedRows.length) return;
 
-      // 剔除暫存用的 _badge 屬性
-      const exportData = processedData.map(row => {
-        const item = { ...row };
-        delete item._badge;
-        return item;
+      const fullExportData = [finalHeaders, ...processedRows];
+      const worksheet = XLSX.utils.aoa_to_sheet(fullExportData);
+
+      // 設定欄位隱藏狀態 (!cols)
+      const colProperties = finalHeaders.map(headerName => {
+        const isVisible = TARGET_HEADERS.includes(headerName);
+        return { hidden: !isVisible };
       });
 
-      // 設定 header 為 originalHeaders，確保匯出時欄位順序與總數都跟原檔一模一樣
-      const worksheet = XLSX.utils.json_to_sheet(exportData, { header: originalHeaders });
+      worksheet['!cols'] = colProperties;
+
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "打單資料");
 
-      const outName = `${uploadFileName}_轉換完成.xlsx`;
+      const outName = `${uploadFileName}_打單資料已轉換.xlsx`;
       XLSX.writeFile(workbook, outName);
     });
   </script>
